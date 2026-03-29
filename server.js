@@ -185,12 +185,22 @@ function startBattle(roomId) {
 
     const p1Id = room.playerIds[0];
     const p2Id = room.playerIds[1];
+    const p1 = room.players[p1Id];
+    const p2 = room.players[p2Id];
 
-    // Server -> Clients: battle_init
-    io.to(roomId).emit("battle_init", {
-        player: room.fighters[p1Id],
-        opponent: room.fighters[p2Id]
-    });
+    // Server -> Clients: battle_init (Personalized so 'player' is always 'me')
+    if (p1 && !p1.isAI) {
+        p1.socket.emit("battle_init", {
+            player: room.fighters[p1Id],
+            opponent: room.fighters[p2Id]
+        });
+    }
+    if (p2 && !p2.isAI) {
+        p2.socket.emit("battle_init", {
+            player: room.fighters[p2Id],
+            opponent: room.fighters[p1Id]
+        });
+    }
 
     // STEP 3 – DETERMINE TURN ORDER
     setTimeout(() => nextTurn(roomId), 1500);
@@ -346,7 +356,6 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             damage: dmg,
             heal: healAmount,
             skillName: skillNameOverride || skill.name,
-            skillId: skillId,
             canAct: false
         });
     }
