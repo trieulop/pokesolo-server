@@ -193,8 +193,10 @@ function startBattle(roomId) {
         currentAttackerId: room.currentAttackerId
     });
 
-    // Notify the first attacker
-    sendTurnNotification(roomId);
+    // Notify the first attacker with a slight delay to allow client UI setup
+    setTimeout(() => {
+        sendTurnNotification(roomId);
+    }, 1000);
 }
 
 function sendTurnNotification(roomId) {
