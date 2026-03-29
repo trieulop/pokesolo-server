@@ -389,15 +389,26 @@ io.on("connection", (socket) => {
         if (Object.keys(room.selections).length === 2 || (Object.keys(room.selections).length === 1 && room.playerIds.some(id => room.players[id].isAI))) {
             // If AI is present, it's already selected
             if (room.playerIds.some(id => room.players[id].isAI)) {
-                const aiId = room.playerIds.find(id => room.players[id].isAI);
-                const aiOpt = room.players[aiId].options[0];
-                // Mocking AI selection
+                const aiId = room.playerIds.find(id => id !== socket.id); // AI's ID
+                
+                // Select 4 unique random skills for AI
+                const allSkillIds = Object.keys(Skills);
+                const aiSkills = {};
+                let pool = [...allSkillIds];
+                for(let i=0; i<4 && pool.length > 0; i++) {
+                    const idx = Math.floor(Math.random() * pool.length);
+                    const randomId = pool.splice(idx, 1)[0];
+                    aiSkills[randomId] = { id: randomId, ...Skills[randomId] };
+                }
+
                 room.fighters[aiId] = {
-                    id: aiOpt.id,
-                    name: "AI Pokemon",
-                    maxHp: 200, hp: 200, atk: 50, def: 50, spd: 50,
-                    types: ['normal'],
-                    skills: { 'tackle': Skills['tackle'] },
+                    id: aiId,
+                    name: "AI トレーナー",
+                    maxHp: 200, hp: 200, atk: 55, def: 45, spd: 45,
+                    spriteKey: 'pikachu', 
+                    uiSpriteUrl: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png',
+                    types: ['electric'],
+                    skills: aiSkills,
                     isProtecting: false
                 };
             }
@@ -405,22 +416,31 @@ io.on("connection", (socket) => {
         }
     });
 
+    // Handle both old and new event names for compatibility
+    socket.on("request_rematch", (data) => {
+        socket.emit("retry_decision", { ...data, accept: true });
+    });
+
     socket.on("retry_decision", ({ roomId, accept }) => {
         const room = rooms[roomId];
         if (!room) return;
+        
+        if (!room.decision) room.decision = {};
         room.decision[socket.id] = accept;
         
         const otherId = room.playerIds.find(id => id !== socket.id);
-        const other = room.players[otherId];
+        const otherPlayer = room.players[otherId];
 
         if (!accept) {
-            if (other && !other.isAI) other.socket.emit("retry_declined");
+            if (otherPlayer && !otherPlayer.isAI) otherPlayer.socket.emit("retry_declined");
             return;
         }
 
-        if (other && other.isAI && accept) {
-            // AI always accepts
-            createRoom(socket, other);
+        // Check if both or AI
+        if (otherPlayer && otherPlayer.isAI) {
+            // Restart with same AI
+            const p1 = room.players[socket.id].socket;
+            createRoom(p1, otherPlayer);
             return;
         }
 
