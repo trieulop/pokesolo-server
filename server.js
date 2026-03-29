@@ -167,90 +167,94 @@ function startBattle(roomId) {
     if (!room) return;
     room.state = "battle";
 
-    // Data passed from client in 'select_pokemon' should include basic current stats
-    // But for a true authoritative server, we ideally fetch stats here too.
-    // To keep it simple for now, we'll assume the client sends the Pokemon data.
-    io.to(roomId).emit("battle_start", {
-        fighters: room.fighters
+    // Setup initial stamina and determine first turn
+    const p1Id = room.playerIds[0];
+    const p2Id = room.playerIds[1];
+    
+    room.playerIds.forEach(pid => {
+        const f = room.fighters[pid];
+        f.stamina = Math.min(100, 30 + (f.spd / 3));
     });
 
-    setTimeout(() => runBattleLoop(roomId), 1500);
+    const f1 = room.fighters[p1Id];
+    const f2 = room.fighters[p2Id];
+    
+    // Determine who starts
+    if (f1.spd > f2.spd) {
+        room.currentAttackerId = p1Id;
+    } else if (f2.spd > f1.spd) {
+        room.currentAttackerId = p2Id;
+    } else {
+        room.currentAttackerId = Math.random() < 0.5 ? p1Id : p2Id;
+    }
+
+    io.to(roomId).emit("battle_start", {
+        fighters: room.fighters,
+        currentAttackerId: room.currentAttackerId
+    });
+
+    // Notify the first attacker
+    sendTurnNotification(roomId);
 }
 
-async function runBattleLoop(roomId) {
+function sendTurnNotification(roomId) {
     const room = rooms[roomId];
     if (!room || room.state !== "battle") return;
 
-    const p1Id = room.playerIds[0];
-    const p2Id = room.playerIds[1];
-    const f1 = room.fighters[p1Id];
-    const f2 = room.fighters[p2Id];
+    const attackerId = room.currentAttackerId;
+    const attacker = room.players[attackerId];
 
-    if (!f1 || !f2) return;
-
-    // Determine order
-    let firstId, secondId;
-    if (f1.spd > f2.spd) {
-        firstId = p1Id; secondId = p2Id;
-    } else if (f2.spd > f1.spd) {
-        firstId = p2Id; secondId = p1Id;
+    if (attacker.isAI) {
+        // AI Turn: wait 1.5s then act
+        setTimeout(() => {
+            const fAttacker = room.fighters[attackerId];
+            const fDefender = room.fighters[room.playerIds.find(id => id !== attackerId)];
+            const skill = chooseSkillServer(fAttacker, fDefender);
+            processTurn(roomId, attackerId, skill.id);
+        }, 1500);
     } else {
-        firstId = Math.random() < 0.5 ? p1Id : p2Id;
-        secondId = firstId === p1Id ? p2Id : p1Id;
+        // Player Turn
+        attacker.socket.emit("your_turn", {
+            stamina: room.fighters[attackerId].stamina
+        });
     }
-
-    // Run Turn 1
-    await executeAction(roomId, firstId, secondId);
-    if (room.state === "finished") return;
-
-    // Run Turn 2
-    setTimeout(async () => {
-        await executeAction(roomId, secondId, firstId);
-        if (room.state === "finished") return;
-
-        // Next Loop
-        setTimeout(() => runBattleLoop(roomId), 2000);
-    }, 2000);
 }
 
-async function executeAction(roomId, attackerId, defenderId) {
+function processTurn(roomId, attackerId, skillId) {
     const room = rooms[roomId];
-    if (!room) return;
+    if (!room || room.state !== "battle" || room.currentAttackerId !== attackerId) return;
 
+    const defenderId = room.playerIds.find(id => id !== attackerId);
     const attacker = room.fighters[attackerId];
     const defender = room.fighters[defenderId];
-    if (!attacker || !defender || attacker.hp <= 0) return;
+    const skill = Skills[skillId];
+
+    if (!attacker || !defender || !skill) return;
+
+    // Check stamina (Server side check)
+    const cost = Math.round(skill.type === 'attack' ? skill.power * 0.3 : 10);
+    if (attacker.stamina < cost) return;
 
     room.turnCount++;
-    // Use the 2-action = 1 turn logic as requested earlier
     const roundCount = Math.floor((room.turnCount - 1) / 2);
     const damageMult = 1.0 + (roundCount * 0.05);
     const healMult = Math.max(0.1, 1.0 - (roundCount * 0.05));
 
-    // Reset protection
+    attacker.stamina -= cost;
     attacker.isProtecting = false;
 
-    // AI Logic or Player Input? 
-    // In current spec "Server is authoritative", but "AIFallback" means player vs AI.
-    // For Player vs Player, we'd wait for input, but the user said "reuse battle engine".
-    // I'll make it auto-battle for simplicity like the original, or implement "Wait for input" if Solo implies control.
-    // The prompt says "Selection -> Battle", usually implies watching the battle after choosing.
-    // BUT "AI uses same logic as AIController" implies automatic skill selection.
-    
-    // Automatic Skill Selection (Server Side AI)
-    const skill = chooseSkillServer(attacker, defender);
-    
     let result = {
         attackerId,
         defenderId,
-        skillId: skill.id,
+        skillId: skillId,
         skillName: skill.name,
         type: skill.type,
         damage: 0,
         heal: 0,
         isProtecting: false,
         effectiveness: 1.0,
-        hp: {}
+        hp: {},
+        stamina: attacker.stamina
     };
 
     if (skill.type === 'heal') {
@@ -262,7 +266,6 @@ async function executeAction(roomId, attackerId, defenderId) {
         attacker.isProtecting = true;
         result.isProtecting = true;
     } else {
-        // Attack
         let effort = getEffectiveness(skill.element, defender.types);
         let finalDmgMult = effort;
         if (defender.isProtecting) {
@@ -273,8 +276,6 @@ async function executeAction(roomId, attackerId, defenderId) {
         let baseDmg = (attacker.atk * skill.power) / 50;
         baseDmg = (baseDmg / 5) * damageMult;
         let actualDmg = Math.floor(baseDmg * (0.8 + Math.random()*0.4) * finalDmgMult);
-        
-        // Mitigation
         let mitigated = Math.max(1, Math.floor(actualDmg * (100 / (100 + defender.def))));
         defender.hp = Math.max(0, defender.hp - mitigated);
         
@@ -282,11 +283,7 @@ async function executeAction(roomId, attackerId, defenderId) {
         result.effectiveness = effort;
     }
 
-    result.hp = {
-        [attackerId]: attacker.hp,
-        [defenderId]: defender.hp
-    };
-
+    result.hp = { [attackerId]: attacker.hp, [defenderId]: defender.hp };
     io.to(roomId).emit("battle_step", result);
 
     if (defender.hp <= 0) {
@@ -298,19 +295,33 @@ async function executeAction(roomId, attackerId, defenderId) {
                 pokemonName: attacker.name
             });
         }, 1500);
+    } else {
+        // Switch Turn
+        room.currentAttackerId = defenderId;
+        // Regen stamina for the NEXT attacker
+        const regen = 10 + (defender.spd / 10);
+        defender.stamina = Math.min(100, defender.stamina + regen);
+        
+        setTimeout(() => sendTurnNotification(roomId), 1500);
     }
 }
 
 function chooseSkillServer(attacker, defender) {
-    // Simple version of AIController
     let available = Object.keys(attacker.skills).map(id => ({ id, ...Skills[id] }));
-    if (attacker.hp / attacker.maxHp < 0.4 && available.some(s => s.id === 'heal')) {
-         if (Math.random() < 0.7) return available.find(s => s.id === 'heal');
+    // Filter by affordable
+    let affordable = available.filter(s => {
+        const cost = Math.round(s.type === 'attack' ? s.power * 0.3 : 10);
+        return attacker.stamina >= cost;
+    });
+
+    if (affordable.length === 0) return { id: 'tackle', ...Skills['tackle'] }; // Fallback
+
+    if (attacker.hp / attacker.maxHp < 0.4 && affordable.some(s => s.id === 'heal')) {
+         if (Math.random() < 0.7) return affordable.find(s => s.id === 'heal');
     }
-    // Just random attack for now or highest power
-    let attacks = available.filter(s => s.type === 'attack');
+    let attacks = affordable.filter(s => s.type === 'attack');
     attacks.sort((a, b) => b.power - a.power);
-    return attacks[0] || available[0];
+    return attacks[0] || affordable[0];
 }
 
 // ====== SOCKET ======
@@ -375,15 +386,30 @@ io.on("connection", (socket) => {
         room.decision[socket.id] = accept;
         
         const otherId = room.playerIds.find(id => id !== socket.id);
-        if (room.players[otherId].isAI && accept) {
-            // AI always accepts
-            createRoom(socket, room.players[otherId]);
+        const other = room.players[otherId];
+
+        if (!accept) {
+            if (other && !other.isAI) other.socket.emit("retry_declined");
             return;
         }
 
-        if (room.decision[p1Id] && room.decision[p2Id]) {
-            createRoom(room.players[p1Id].socket, room.players[p2Id].socket);
+        if (other && other.isAI && accept) {
+            // AI always accepts
+            createRoom(socket, other);
+            return;
         }
+
+        const [id1, id2] = room.playerIds;
+        if (room.decision[id1] && room.decision[id2]) {
+            const p1 = room.players[id1].socket;
+            const p2 = room.players[id2].socket;
+            createRoom(p1, p2);
+        }
+    });
+
+    socket.on("use_skill", (data) => {
+        const { roomId, skillId } = data;
+        processTurn(roomId, socket.id, skillId);
     });
 
     socket.on("disconnect", () => {
