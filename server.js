@@ -166,23 +166,33 @@ function checkSelectionComplete(roomId) {
     startBattle(roomId);
 }
 
-// ====== BATTLE LOGIC (Manual / Turn-based) ======
+// ====== BATTLE LOGIC (Authoritative Server) ======
 function startBattle(roomId) {
     const room = rooms[roomId];
     if (!room) return;
     room.state = "battle";
     room.currentTurnPlayerId = null;
+    room.turnCount = 0;
 
-    // Initialize stamina: 30 + (spd / 3)
+    // STEP 2 – INITIALIZE STATS
+    // Initial STAMINA ＝ 30 ＋ ポケモンのスタミナ／１５ (using spd or def if stamina null)
     room.playerIds.forEach(pid => {
         const f = room.fighters[pid];
-        f.stamina = Math.min(100, 30 + (f.spd / 3));
+        const baseStamina = f.stamina || f.spd || 50; 
+        f.stamina = 30 + (baseStamina / 15);
+        f.maxStamina = 100; // Visual limit
     });
 
-    io.to(roomId).emit("battle_start", {
-        fighters: room.fighters
+    const p1Id = room.playerIds[0];
+    const p2Id = room.playerIds[1];
+
+    // Server -> Clients: battle_init
+    io.to(roomId).emit("battle_init", {
+        player: room.fighters[p1Id],
+        opponent: room.fighters[p2Id]
     });
 
+    // STEP 3 – DETERMINE TURN ORDER
     setTimeout(() => nextTurn(roomId), 1500);
 }
 
@@ -190,60 +200,51 @@ function nextTurn(roomId) {
     const room = rooms[roomId];
     if (!room || room.state !== "battle") return;
 
-    // Determine whose turn it is
     const p1Id = room.playerIds[0];
     const p2Id = room.playerIds[1];
     const f1 = room.fighters[p1Id];
     const f2 = room.fighters[p2Id];
 
     if (!room.currentTurnPlayerId) {
-        // Decide first attacker based on SPD (Ensure we reflect latest stats)
-        const p1Spd = f1.spd || 0;
-        const p2Spd = f2.spd || 0;
-        
-        if (p1Spd > p2Spd) room.currentTurnPlayerId = p1Id;
-        else if (p2Spd > p1Spd) room.currentTurnPlayerId = p2Id;
+        // Higher SPEED goes first
+        if (f1.spd > f2.spd) room.currentTurnPlayerId = p1Id;
+        else if (f2.spd > f1.spd) room.currentTurnPlayerId = p2Id;
         else room.currentTurnPlayerId = Math.random() < 0.5 ? p1Id : p2Id;
-        
-        console.log(`Battle Start: First turn decided by SPD. Room:${roomId}, Winner:${room.currentTurnPlayerId} (P1:${p1Spd}, P2:${p2Spd})`);
     } else {
         // Switch turn
         room.currentTurnPlayerId = (room.currentTurnPlayerId === p1Id) ? p2Id : p1Id;
     }
 
     const activeId = room.currentTurnPlayerId;
-    const activePlayer = room.players[activeId];
     const activeFighter = room.fighters[activeId];
 
-    // Refund stamina based on SPD: 10 + (SPD / 10)
-    const regen = 10 + (activeFighter.spd / 10);
-    activeFighter.stamina = Math.min(100, activeFighter.stamina + regen);
+    // Every 2 actions (1 turn) -> Stamina Regen (10 + stat / 10)
+    if (room.turnCount > 0 && room.turnCount % 2 === 0) {
+        room.playerIds.forEach(pid => {
+            const f = room.fighters[pid];
+            const baseStamina = f.stamina_stat || f.spd || 50;
+            const regen = 10 + (baseStamina / 10);
+            f.stamina = Math.min(100, f.stamina + regen);
+        });
+    }
 
-    console.log(`Turn Start: Room:${roomId}, Active:${activePlayer.name}, SP Regen:${Math.round(regen)}`);
+    console.log(`Step 3/7: Turn Start. Player:${activeId}, Room:${roomId}`);
 
-    // Notify turn start and status
+    // Server -> Clients: turn_start
     io.to(roomId).emit("turn_start", {
-        playerId: activeId,
-        fighters: room.fighters // Sync HP/SP
+        currentTurnPlayerId: activeId,
+        fighters: room.fighters // Sync for safety
     });
 
+    // AI or Human handling
+    const activePlayer = room.players[activeId];
     if (activePlayer.isAI) {
         setTimeout(() => {
             const skill = chooseSkillServer(activeFighter, room.fighters[activeId === p1Id ? p2Id : p1Id]);
             processSkillUse(roomId, activeId, skill.id);
-        }, 1500);
+        }, 1200);
     } else {
-        // Request action from human player
         activePlayer.socket.emit("request_action");
-        
-        // Timeout backup (30s)
-        clearTimeout(room.actionTimeout);
-        room.actionTimeout = setTimeout(() => {
-            if (room.currentTurnPlayerId === activeId) {
-                const skill = chooseSkillServer(activeFighter, room.fighters[activeId === p1Id ? p2Id : p1Id]);
-                processSkillUse(roomId, activeId, skill.id);
-            }
-        }, 30000);
     }
 }
 
@@ -298,41 +299,28 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
     const skill = attacker.skills[skillId] || Skills[skillId] || { name: skillNameOverride || 'Unknown', type: 'attack', power: 40 };
 
     room.turnCount++;
+    // STEP 5 – SCALING RULE: Every 2 actions (1 round)
     const roundCount = Math.floor((room.turnCount - 1) / 2);
-    const damageMult = 1.0 + (roundCount * 0.05);
-    const healMult = Math.max(0.1, 1.0 - (roundCount * 0.05));
+    const damageMult = 1.0 + (roundCount * 0.05); // Damage +5%
+    const healDecay = 1.0 - (roundCount * 0.05); // Healing -5% (implied)
 
     attacker.isProtecting = false;
 
-    let result = {
-        attackerId,
-        defenderId,
-        skillId: skillId,
-        skillName: skillNameOverride || skill.name,
-        type: skill.type,
-        damage: 0,
-        heal: 0,
-        isProtecting: false,
-        effectiveness: 1.0,
-        hp: {},
-        stamina: { [attackerId]: attacker.stamina }
-    };
+    let dmg = 0;
+    let healAmount = 0;
+    let effectiveness = getEffectiveness(skill.element, defender.types);
 
     if (skill.type === 'heal') {
-        // PokeTrain heal logic: Math.max(15, Math.floor(40 * healMult))
-        let healPercent = Math.max(15, Math.floor(40 * healMult));
-        let healAmount = Math.floor(attacker.maxHp * (healPercent / 100));
-        let oldHp = attacker.hp;
+        // Minimum heal = 15 HP
+        const baseHeal = Math.floor(attacker.maxHp * 0.3 * healDecay);
+        healAmount = Math.max(15, baseHeal);
+        const oldHp = attacker.hp;
         attacker.hp = Math.min(attacker.maxHp, attacker.hp + healAmount);
-        result.heal = attacker.hp - oldHp;
+        healAmount = attacker.hp - oldHp;
     } else if (skill.type === 'buff') {
         attacker.isProtecting = true;
-        result.isProtecting = true;
     } else {
         // Attack!
-        let effectiveness = getEffectiveness(skill.element, defender.types);
-        
-        // Final damage formula from BattleEngine.js
         let baseDmg = (attacker.atk * (skill.power || 40)) / 50;
         baseDmg = (baseDmg / 5) * damageMult; 
         
@@ -342,30 +330,51 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             defender.isProtecting = false; // Consume protection
         }
 
-        // Damage randomization (80% - 120%) and Mitigated by DEF
         let rawDmg = baseDmg * (0.8 + Math.random() * 0.4) * finalDmgMult;
-        let mitigated = Math.max(1, Math.floor(rawDmg * (100 / (100 + defender.def))));
-        
-        defender.hp = Math.max(0, defender.hp - mitigated);
-        result.damage = mitigated;
-        result.effectiveness = effectiveness;
+        dmg = Math.max(1, Math.floor(rawDmg * (100 / (100 + defender.def))));
+        defender.hp = Math.max(0, defender.hp - dmg);
     }
 
-    result.hp = { [attackerId]: attacker.hp, [defenderId]: defender.hp };
-    result.stamina = { [attackerId]: attacker.stamina, [defenderId]: defender.stamina };
+    // STEP 6 – SERVER RESPONSE (SYNC BOTH CLIENTS)
+    
+    // To Attacker
+    const attackerPlayer = room.players[attackerId];
+    if (attackerPlayer && !attackerPlayer.isAI) {
+        attackerPlayer.socket.emit("action_result_self", {
+            stamina: attacker.stamina,
+            opponentHP: defender.hp,
+            damage: dmg,
+            heal: healAmount,
+            skillName: skillNameOverride || skill.name,
+            canAct: false
+        });
+    }
 
-    io.to(roomId).emit("battle_step", result);
+    // To Defender
+    const defenderPlayer = room.players[defenderId];
+    if (defenderPlayer && !defenderPlayer.isAI) {
+        defenderPlayer.socket.emit("action_result_opponent", {
+            remainingHP: defender.hp,
+            attackerHP: attacker.hp, // added for sync
+            damage: dmg,
+            heal: healAmount,
+            skillName: skillNameOverride || skill.name,
+            skillId: skillId // to trigger correct animation
+        });
+    }
 
+    // STEP 7 – SWITCH TURN
     if (defender.hp <= 0) {
         room.state = "finished";
         setTimeout(() => {
+            // STEP 8 – GAME END
             io.to(roomId).emit("battle_end", {
                 winnerId: attackerId,
-                winnerName: room.players[attackerId].name,
-                pokemonName: attacker.name
+                winnerPokemonName: attacker.name
             });
         }, 1500);
     } else {
+        // Switch turn after animation pause
         setTimeout(() => nextTurn(roomId), 2500);
     }
 }
