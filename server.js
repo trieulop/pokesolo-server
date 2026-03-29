@@ -196,7 +196,7 @@ function startBattle(roomId) {
     // Notify the first attacker with a slight delay to allow client UI setup
     setTimeout(() => {
         sendTurnNotification(roomId);
-    }, 1000);
+    }, 1500);
 }
 
 function sendTurnNotification(roomId) {
@@ -357,6 +357,23 @@ io.on("connection", (socket) => {
         if (!room) return;
 
         room.selections[socket.id] = pokemonData;
+        // Ensure 4 skills (PokeTrain parity)
+        const skillKeys = Object.keys(pokemonData.skills);
+        if (skillKeys.length < 4) {
+            const fallbackSkills = [
+                { id: 'tackle', name: 'たいあたり', power: 35, cost: 12, type: 'normal' },
+                { id: 'quick_attack', name: 'でんこうせっか', power: 30, cost: 9, type: 'normal' },
+                { id: 'scratch', name: 'ひっかく', power: 35, cost: 12, type: 'normal' },
+                { id: 'growl', name: 'なきごえ', power: 0, cost: 8, type: 'normal' }
+            ];
+            for (let i = 0; i < 4 - skillKeys.length; i++) {
+                const fs = fallbackSkills[i];
+                if (!pokemonData.skills[fs.id]) {
+                    pokemonData.skills[fs.id] = fs;
+                }
+            }
+        }
+
         room.fighters[socket.id] = {
             ...pokemonData,
             hp: pokemonData.maxHp,
