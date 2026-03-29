@@ -347,7 +347,6 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             heal: healAmount,
             skillName: skillNameOverride || skill.name,
             skillId: skillId,
-            type: skill.type,
             canAct: false
         });
     }
@@ -361,8 +360,7 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             damage: dmg,
             heal: healAmount,
             skillName: skillNameOverride || skill.name,
-            skillId: skillId, // to trigger correct animation
-            type: skill.type
+            skillId: skillId // to trigger correct animation
         });
     }
 
