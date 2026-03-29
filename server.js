@@ -193,10 +193,15 @@ function nextTurn(roomId) {
     const f2 = room.fighters[p2Id];
 
     if (!room.currentTurnPlayerId) {
-        // Decide first attacker based on SPD
-        if (f1.spd > f2.spd) room.currentTurnPlayerId = p1Id;
-        else if (f2.spd > f1.spd) room.currentTurnPlayerId = p2Id;
+        // Decide first attacker based on SPD (Ensure we reflect latest stats)
+        const p1Spd = f1.spd || 0;
+        const p2Spd = f2.spd || 0;
+        
+        if (p1Spd > p2Spd) room.currentTurnPlayerId = p1Id;
+        else if (p2Spd > p1Spd) room.currentTurnPlayerId = p2Id;
         else room.currentTurnPlayerId = Math.random() < 0.5 ? p1Id : p2Id;
+        
+        console.log(`Battle Start: First turn decided by SPD. Room:${roomId}, Winner:${room.currentTurnPlayerId} (P1:${p1Spd}, P2:${p2Spd})`);
     } else {
         // Switch turn
         room.currentTurnPlayerId = (room.currentTurnPlayerId === p1Id) ? p2Id : p1Id;
@@ -236,17 +241,30 @@ function nextTurn(roomId) {
     }
 }
 
-function processSkillUse(roomId, playerId, skillId) {
+function processSkillUse(roomId, playerId, skillId, skillName, stats) {
     const room = rooms[roomId];
     if (!room || room.state !== "battle" || room.currentTurnPlayerId !== playerId) return;
     clearTimeout(room.actionTimeout);
 
     const attacker = room.fighters[playerId];
     const defenderId = room.playerIds.find(id => id !== playerId);
-    const defender = room.fighters[defenderId];
-    const skill = attacker.skills[skillId]; // Use pokemon's specific skill data
+    
+    // Synchronize stats if provided by client
+    if (stats) {
+        attacker.atk = stats.atk || attacker.atk;
+        attacker.def = stats.def || attacker.def;
+        attacker.spd = stats.spd || attacker.spd;
+        attacker.hp = stats.hp || attacker.hp;
+        attacker.maxHp = stats.maxHp || attacker.maxHp;
+    }
 
-    if (!skill) return;
+    // Use pokemon's specific skill data if available
+    const skill = attacker.skills[skillId] || Skills[skillId]; 
+
+    if (!skill) {
+        console.error(`Skill ID ${skillId} not found for player ${playerId}`);
+        return;
+    }
 
     // Stamina check
     const cost = getStaminaCost(skill);
@@ -257,7 +275,7 @@ function processSkillUse(roomId, playerId, skillId) {
     }
 
     attacker.stamina -= cost;
-    executeAction(roomId, playerId, defenderId, skillId);
+    executeAction(roomId, playerId, defenderId, skillId, skillName || skill.name);
 }
 
 function getStaminaCost(skill) {
@@ -265,13 +283,13 @@ function getStaminaCost(skill) {
     return 10; // heal/buff
 }
 
-async function executeAction(roomId, attackerId, defenderId, skillId) {
+async function executeAction(roomId, attackerId, defenderId, skillId, skillNameOverride) {
     const room = rooms[roomId];
     if (!room) return;
 
     const attacker = room.fighters[attackerId];
     const defender = room.fighters[defenderId];
-    const skill = Skills[skillId];
+    const skill = attacker.skills[skillId] || Skills[skillId] || { name: skillNameOverride || 'Unknown', type: 'attack', power: 40 };
 
     room.turnCount++;
     const roundCount = Math.floor((room.turnCount - 1) / 2);
@@ -284,7 +302,7 @@ async function executeAction(roomId, attackerId, defenderId, skillId) {
         attackerId,
         defenderId,
         skillId: skillId,
-        skillName: skill.name,
+        skillName: skillNameOverride || skill.name,
         type: skill.type,
         damage: 0,
         heal: 0,
@@ -453,8 +471,8 @@ io.on("connection", (socket) => {
     });
 
     socket.on("use_skill", (data) => {
-        const { roomId, skillId } = data;
-        processSkillUse(roomId, socket.id, skillId);
+        const { roomId, skillId, skillName, stats } = data;
+        processSkillUse(roomId, socket.id, skillId, skillName, stats);
     });
 
     socket.on("disconnect", () => {
