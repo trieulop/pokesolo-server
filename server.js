@@ -65,7 +65,11 @@ function getEffectiveness(attackType, defenderTypes) {
     let mult = 1.0;
     let data = TypeEffectiveness[attackType];
     if(!data) return 1.0;
-    for (let t of defenderTypes) {
+    
+    // Support either single type or array
+    const types = Array.isArray(defenderTypes) ? defenderTypes : [defenderTypes];
+    
+    for (let t of types) {
         if (data.strongAgainst.includes(t)) mult *= 2.0;
         if (data.weakAgainst.includes(t)) mult *= 0.5;
     }
@@ -215,6 +219,8 @@ function nextTurn(roomId) {
     const regen = 10 + (activeFighter.spd / 10);
     activeFighter.stamina = Math.min(100, activeFighter.stamina + regen);
 
+    console.log(`Turn Start: Room:${roomId}, Active:${activePlayer.name}, SP Regen:${Math.round(regen)}`);
+
     // Notify turn start and status
     io.to(roomId).emit("turn_start", {
         playerId: activeId,
@@ -249,8 +255,8 @@ function processSkillUse(roomId, playerId, skillId, skillName, stats) {
     const attacker = room.fighters[playerId];
     const defenderId = room.playerIds.find(id => id !== playerId);
     
-    // Synchronize stats if provided by client
-    if (stats) {
+    // Synchronize stats if provided by client (First turn only or as update)
+    if (stats && room.turnCount === 0) {
         attacker.atk = stats.atk || attacker.atk;
         attacker.def = stats.def || attacker.def;
         attacker.spd = stats.spd || attacker.spd;
@@ -313,31 +319,40 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
     };
 
     if (skill.type === 'heal') {
-        let baseHeal = Math.max(15, Math.floor(40 * healMult));
-        let healAmount = Math.floor(attacker.maxHp * (baseHeal / 100));
+        // PokeTrain heal logic: Math.max(15, Math.floor(40 * healMult))
+        let healPercent = Math.max(15, Math.floor(40 * healMult));
+        let healAmount = Math.floor(attacker.maxHp * (healPercent / 100));
+        let oldHp = attacker.hp;
         attacker.hp = Math.min(attacker.maxHp, attacker.hp + healAmount);
-        result.heal = healAmount;
+        result.heal = attacker.hp - oldHp;
     } else if (skill.type === 'buff') {
         attacker.isProtecting = true;
         result.isProtecting = true;
     } else {
-        let effort = getEffectiveness(skill.element, defender.types);
-        let finalDmgMult = effort;
+        // Attack!
+        let effectiveness = getEffectiveness(skill.element, defender.types);
+        
+        // Final damage formula from BattleEngine.js
+        let baseDmg = (attacker.atk * (skill.power || 40)) / 50;
+        baseDmg = (baseDmg / 5) * damageMult; 
+        
+        let finalDmgMult = effectiveness;
         if (defender.isProtecting) {
             finalDmgMult *= 0.5;
-            defender.isProtecting = false;
+            defender.isProtecting = false; // Consume protection
         }
 
-        let baseDmg = (attacker.atk * (skill.power || 40)) / 50;
-        baseDmg = (baseDmg / 5) * damageMult;
-        let actualDmg = Math.floor(baseDmg * (0.8 + Math.random()*0.4) * finalDmgMult);
-        let mitigated = Math.max(1, Math.floor(actualDmg * (100 / (100 + defender.def))));
+        // Damage randomization (80% - 120%) and Mitigated by DEF
+        let rawDmg = baseDmg * (0.8 + Math.random() * 0.4) * finalDmgMult;
+        let mitigated = Math.max(1, Math.floor(rawDmg * (100 / (100 + defender.def))));
+        
         defender.hp = Math.max(0, defender.hp - mitigated);
         result.damage = mitigated;
-        result.effectiveness = effort;
+        result.effectiveness = effectiveness;
     }
 
     result.hp = { [attackerId]: attacker.hp, [defenderId]: defender.hp };
+    result.stamina = { [attackerId]: attacker.stamina, [defenderId]: defender.stamina };
 
     io.to(roomId).emit("battle_step", result);
 
