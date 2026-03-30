@@ -442,6 +442,12 @@ function chooseSkillServer(attacker, defender) {
     return chosen;
 }
 
+const PokeNames = {
+    25: "ピカチュウ", 6: "リザードン", 9: "カメックス", 3: "フシギバナ", 150: "ミュウツー",
+    149: "カイリュー", 130: "ギャラドス", 94: "ゲンガー", 65: "フーディン", 38: "キュウコン",
+    59: "ウインディ", 131: "ラプラス", 143: "カビゴン", 248: "バンギラス", 448: "ルカリオ", 700: "ニンフィア"
+};
+
 // ====== SOCKET ======
 io.on("connection", (socket) => {
     socket.on("set_name", (name) => {
@@ -502,11 +508,11 @@ io.on("connection", (socket) => {
                 const randomAiId = PokePool[Math.floor(Math.random() * PokePool.length)];
                 room.fighters[aiId] = {
                     id: aiId,
-                    name: "AI トレーナー",
-                    maxHp: 200, hp: 200, atk: 55, def: 45, spd: 45,
-                    spriteKey: 'pikachu', 
+                    name: PokeNames[randomAiId] || "AI トレーナー",
+                    maxHp: 200, hp: 200, atk: 65, def: 55, spd: 55,
+                    spriteKey: 'poke', 
                     uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${randomAiId}.png`,
-                    types: ['electric'],
+                    types: ['electric'], // Type will be updated via effectiveness check if needed, but simple for now
                     skills: aiSkills,
                     isProtecting: false
                 };
