@@ -355,6 +355,7 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             opponentHP: defender.hp,
             damage: dmg,
             heal: healAmount,
+            type: skill.type,
             skillName: skillNameOverride || skill.name,
             skillId: skillId, // added for animation sync
             canAct: false
@@ -369,6 +370,7 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             attackerHP: attacker.hp, // added for sync
             damage: dmg,
             heal: healAmount,
+            type: skill.type,
             skillName: skillNameOverride || skill.name,
             skillId: skillId // to trigger correct animation
         });
@@ -381,7 +383,8 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             // STEP 8 – GAME END
             io.to(roomId).emit("battle_end", {
                 winnerId: attackerId,
-                winnerPokemonName: attacker.name
+                winnerPokemonName: attacker.name,
+                winnerSprite: attacker.uiSpriteUrl
             });
         }, 1500);
     } else {
