@@ -439,6 +439,7 @@ io.on("connection", (socket) => {
         room.fighters[socket.id] = {
             ...pokemonData,
             hp: pokemonData.maxHp,
+            uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${pokemonData.id}.png`,
             isProtecting: false
         };
 
@@ -457,12 +458,13 @@ io.on("connection", (socket) => {
                     aiSkills[randomId] = { id: randomId, ...Skills[randomId] };
                 }
 
+                const randomAiId = PokePool[Math.floor(Math.random() * PokePool.length)];
                 room.fighters[aiId] = {
                     id: aiId,
                     name: "AI トレーナー",
                     maxHp: 200, hp: 200, atk: 55, def: 45, spd: 45,
                     spriteKey: 'pikachu', 
-                    uiSpriteUrl: 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png',
+                    uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${randomAiId}.png`,
                     types: ['electric'],
                     skills: aiSkills,
                     isProtecting: false
