@@ -141,22 +141,29 @@ function startSelection(roomId) {
         }, 1000);
     }
 
-    // Backup timeout
+    // 30 seconds strict timeout: Disconnect ALL players if someone doesn't select
     room.selectionTimeout = setTimeout(() => {
-        autoSelect(roomId);
-    }, 31000);
+        forceRoomDisconnect(roomId, "Selection Timeout - Room Disbanded");
+    }, 30000);
 }
 
-function autoSelect(roomId) {
+function forceRoomDisconnect(roomId, reason) {
     const room = rooms[roomId];
     if (!room) return;
 
+    console.log(`[Server] ${reason}. Room: ${roomId}`);
+    
+    // Notify and Disconnect all sockets currently in this room
     room.playerIds.forEach(pid => {
-        if (!room.selections[pid]) {
-            room.selections[pid] = room.players[pid].options[0];
+        const p = room.players[pid];
+        if (p && !p.isAI && p.socket) {
+            console.log(`[Server] Force disconnecting player: ${pid}`);
+            p.socket.emit("timeout_disconnect", { message: "選択時間の30秒を過ぎたため、ルームを解散しました。" });
+            p.socket.disconnect(true);
         }
     });
-    startBattle(roomId);
+
+    delete rooms[roomId];
 }
 
 function checkSelectionComplete(roomId) {
@@ -355,7 +362,6 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             opponentHP: defender.hp,
             damage: dmg,
             heal: healAmount,
-            type: skill.type,
             skillName: skillNameOverride || skill.name,
             skillId: skillId, // added for animation sync
             canAct: false
