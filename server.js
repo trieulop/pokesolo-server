@@ -356,6 +356,7 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
             damage: dmg,
             heal: healAmount,
             skillName: skillNameOverride || skill.name,
+            skillId: skillId, // added for animation sync
             canAct: false
         });
     }
