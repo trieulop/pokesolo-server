@@ -400,15 +400,46 @@ async function executeAction(roomId, attackerId, defenderId, skillId, skillNameO
 }
 
 function chooseSkillServer(attacker, defender) {
-    // Simple version of AIController
-    let available = Object.keys(attacker.skills).map(id => ({ id, ...Skills[id] }));
-    if (attacker.hp / attacker.maxHp < 0.4 && available.some(s => s.id === 'heal')) {
-         if (Math.random() < 0.7) return available.find(s => s.id === 'heal');
+    let available = Object.keys(attacker.skills).map(id => ({ id, ...attacker.skills[id] }));
+    if (available.length === 0) return { id: 'tackle', name: 'たいあたり', type: 'attack', power: 40 };
+    if (available.length === 1) return available[0];
+
+    let attackerHpPerc = attacker.hp / attacker.maxHp;
+    let defenderHpPerc = defender.hp / defender.maxHp;
+    
+    let bestScore = -Infinity;
+    let chosen = available[0];
+
+    for (let s of available) {
+        let score = 0;
+        switch(s.type) {
+            case 'heal':
+                if (attackerHpPerc < 0.3) score += 100;
+                else if (attackerHpPerc < 0.6) score += 50;
+                else score -= 50;
+                break;
+            case 'buff':
+                if (defenderHpPerc > 0.5 && attackerHpPerc > 0.4) score += 40;
+                break;
+            case 'attack':
+                score += s.power * 0.5;
+                if (defenderHpPerc < 0.25) score += s.power;
+                if (attacker.spd > defender.spd && defenderHpPerc < 0.4) score += s.power * 0.8;
+                
+                // Effectiveness (Simplified since we don't have all constants here, but we can check if needed)
+                let eff = getEffectiveness(s.element, defender.types);
+                if (eff > 1) score += 50;
+                if (eff < 1) score -= 30;
+                break;
+        }
+        
+        score += Math.random() * 10;
+        if (score > bestScore) {
+            bestScore = score;
+            chosen = s;
+        }
     }
-    // Just random attack for now or highest power
-    let attacks = available.filter(s => s.type === 'attack');
-    attacks.sort((a, b) => b.power - a.power);
-    return attacks[0] || available[0];
+    return chosen;
 }
 
 // ====== SOCKET ======
@@ -426,13 +457,17 @@ io.on("connection", (socket) => {
             createRoom(socket, opponent);
         } else {
             queue.push(socket);
+            // 25s static wait + 0-10s random jitter for AI fallback
+            const matchWaitTime = 25000 + Math.random() * 10000;
+            console.log(`[Queue] Waiting ${Math.round(matchWaitTime/1000)}s for player ${socket.id}`);
+            
             socket.matchTimeout = setTimeout(() => {
                 if (queue.includes(socket)) {
                     queue = queue.filter(s => s !== socket);
                     const aiPlayer = { id: "AI_" + Math.random(), name: "AI Rival", isAI: true };
                     createRoom(socket, aiPlayer);
                 }
-            }, 30000);
+            }, matchWaitTime);
         }
     });
 
