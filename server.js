@@ -463,8 +463,8 @@ io.on("connection", (socket) => {
             createRoom(socket, opponent);
         } else {
             queue.push(socket);
-            // 25s static wait + 0-10s random jitter for AI fallback
-            const matchWaitTime = 25000 + Math.random() * 10000;
+            // 15s static wait + 0-10s random jitter for AI fallback
+            const matchWaitTime = 15000 + Math.random() * 10000;
             console.log(`[Queue] Waiting ${Math.round(matchWaitTime/1000)}s for player ${socket.id}`);
             
             socket.matchTimeout = setTimeout(() => {
