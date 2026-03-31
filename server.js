@@ -486,7 +486,7 @@ io.on("connection", (socket) => {
         room.fighters[socket.id] = {
             ...pokemonData,
             hp: pokemonData.maxHp,
-            uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${pokemonData.id}.png`,
+            uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/showdown/${pokemonData.id}.gif`,
             isProtecting: false
         };
 
@@ -511,7 +511,7 @@ io.on("connection", (socket) => {
                     name: PokeNames[randomAiId] || "AI トレーナー",
                     maxHp: 200, hp: 200, atk: 65, def: 55, spd: 55,
                     spriteKey: 'poke', 
-                    uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${randomAiId}.png`,
+                    uiSpriteUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/showdown/${randomAiId}.gif`,
                     types: ['electric'], // Type will be updated via effectiveness check if needed, but simple for now
                     skills: aiSkills,
                     isProtecting: false
